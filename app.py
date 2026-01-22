@@ -43,6 +43,48 @@ with st.expander("Debug (remover depois)"):
     st.write("core found:", CORE_FOUND)
 
 state = load_state()
+def load_last_run_from_log(log_file: str):
+    if not os.path.exists(log_file):
+        return None
+    last = None
+    with open(log_file, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                ev = json.loads(line)
+            except Exception:
+                continue
+            if ev.get("type") == "RUN":
+                last = ev
+    return last
+
+last_run = load_last_run_from_log(LOG_FILE)
+
+# Se state veio "default" / vazio, reconstrói a partir do último RUN do log
+if last_run:
+    if not state.get("positions"):
+        w = last_run.get("weights", {}) or {}
+        state["positions"] = {t: {"state": 1 if float(p) > 0 else 0, "weight": float(p)} for t, p in w.items()}
+    if state.get("equity", 0) in (0, 100000.0) and "equity" in last_run:
+        try:
+            state["equity"] = float(last_run["equity"])
+        except Exception:
+            pass
+    if "peak_equity" in last_run:
+        try:
+            state["peak_equity"] = float(last_run["peak_equity"])
+        except Exception:
+            pass
+    if "drawdown" in last_run:
+        try:
+            state["last_drawdown"] = float(last_run["drawdown"])
+        except Exception:
+            pass
+    if "kill_switch" in last_run:
+        state["kill_switch"] = bool(last_run["kill_switch"])
+
 
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Equity (MVP)", f"{state.get('equity', 0):,.2f}")
