@@ -1,0 +1,79 @@
+name: Daily Trend System
+
+on:
+  schedule:
+    - cron: "15 21 * * 1-5"   # 21:15 UTC ~ 18:15 Brasil (dias úteis)
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-trend-system
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # 🔎 DEBUG: mostra estrutura real do repo no runner
+      - name: Debug - repo structure
+        run: |
+          echo "PWD:"
+          pwd
+          echo "LS - root:"
+          ls -la
+          echo "FIND core/jobs (até 4 níveis):"
+          find . -maxdepth 4 -type d \( -name "core" -o -name "jobs" \) -print
+          echo "FIND run_daily.py (até 6 níveis):"
+          find . -maxdepth 6 -type f -name "run_daily.py" -print
+          echo "HEAD jobs/run_daily.py (primeiras 40 linhas):"
+          if [ -f "jobs/run_daily.py" ]; then
+            sed -n '1,40p' jobs/run_daily.py
+          else
+            echo "ERRO: jobs/run_daily.py não existe."
+          fi
+          echo "HEAD core/storage.py (primeiras 20 linhas):"
+          if [ -f "core/storage.py" ]; then
+            sed -n '1,20p' core/storage.py
+          else
+            echo "ERRO: core/storage.py não existe."
+          fi
+
+      # ▶️ EXECUÇÃO: seta PYTHONPATH e roda o job
+      - name: Run daily job
+        run: |
+          set -e
+          export PYTHONPATH="$GITHUB_WORKSPACE"
+          python jobs/run_daily.py
+
+      # ✅ garante pasta state/ (mesmo que o job não tenha criado, mas deveria)
+      - name: Ensure state folder exists
+        run: |
+          mkdir -p state
+          touch state/.gitkeep
+
+      # 💾 Commit do state + log para o Streamlit ler
+      - name: Commit state + audit trail
+        run: |
+          git config user.name "trend-bot"
+          git config user.email "trend-bot@users.noreply.github.com"
+          git add state/state.json state/events.log state/.gitkeep || true
+          git commit -m "Daily run: update state/audit trail" || echo "No changes to commit"
+          git push
