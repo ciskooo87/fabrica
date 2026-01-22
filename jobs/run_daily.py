@@ -1,6 +1,5 @@
 import os
 import datetime as dt
-
 from core.data import fetch_history, DATA_PROVIDER_VERSION
 from core.storage import load_state, save_state, log_event
 from core.strategy import signal_on_off
@@ -28,7 +27,6 @@ def universe_from_config(cfg):
         val = u.get(key)
         if val:
             tickers.append(str(val).strip().upper())
-    # fallback
     if not tickers:
         tickers = ["BOVA11", "IVVB11", "IMAB11", "GOLD11"]
     return tickers
@@ -51,8 +49,61 @@ def reset_state(cfg, sid):
         "kill_switch": False,
         "positions": {},
         "last_prices": {},
-        "last_run": None,
+        "last_run": None
     }
+
+
+def _ticker_candidates(t: str):
+    """
+    Gera candidatos de ticker para maximizar chance do provider retornar dados.
+    Regra prática: ETFs B3 geralmente precisam de .SA (Yahoo).
+    """
+    t = (t or "").strip().upper()
+    if not t:
+        return []
+
+    cands = [t]
+
+    # Se já veio com sufixo, tenta também sem (e vice-versa)
+    if t.endswith(".SA"):
+        cands.append(t.replace(".SA", ""))
+    else:
+        cands.append(f"{t}.SA")
+
+    # Alguns providers funcionam com hífen/igual (raros, mas barato tentar)
+    # Mantém aqui só como hedge.
+    cands.append(t.replace("-", ""))
+    cands.append(t.replace(".", ""))
+
+    # Remove duplicados preservando ordem
+    seen = set()
+    out = []
+    for x in cands:
+        if x and x not in seen:
+            seen.add(x)
+            out.append(x)
+    return out
+
+
+def _fetch_history_with_fallback(t: str, period="10y", interval="1d"):
+    """
+    Tenta obter histórico com fallback de ticker.
+    Retorna: (df, used_symbol) ou (None, None)
+    """
+    last_err = None
+    for sym in _ticker_candidates(t):
+        try:
+            df = fetch_history(sym, period=period, interval=interval)
+            if df is not None and not df.empty:
+                return df, sym
+        except Exception as e:
+            last_err = e
+            continue
+
+    # Se quiser visibilidade do erro raiz no log, imprime aqui (sem quebrar pipeline)
+    if last_err:
+        print(f"[WARN] fetch_history falhou para {t} (último erro: {type(last_err).__name__}: {last_err})")
+    return None, None
 
 
 def run():
@@ -61,7 +112,7 @@ def run():
 
     trend_cfg = cfg.get("trend") or {}
     window = int(trend_cfg.get("window", 126))
-    ref = str(trend_cfg.get("reference", "SMA")).upper()  # reservado p/ futuro (hoje só usamos SMA)
+    ref = str(trend_cfg.get("reference", "SMA")).upper()
 
     kill_cfg = cfg.get("kill_switch") or {}
     max_dd = float(kill_cfg.get("max_drawdown", 0.20))
@@ -70,7 +121,6 @@ def run():
     state = load_state()
     sid = state_identity(cfg, tickers)
 
-    # Estado compatível com o "shape" atual
     if state.get("state_id") and state.get("state_id") != sid:
         state = reset_state(cfg, sid)
     else:
@@ -83,79 +133,68 @@ def run():
         state.setdefault("last_prices", {})
         state.setdefault("last_run", None)
 
+    now = dt.datetime.utcnow().isoformat() + "Z"
+
     signals = {}
     prices = {}
+    used_symbols = {}
     skipped = []
 
-    # Busca + sinal por ticker (robusto)
+    # Coleta dados com fallback
     for t in tickers:
-        df = fetch_history(t, period="10y", interval="1d")
+        df, used = _fetch_history_with_fallback(t, period="10y", interval="1d")
         if df is None or df.empty:
             print(f"[WARN] Sem dados para {t}. Pulando ticker.")
             skipped.append(t)
             continue
 
+        used_symbols[t] = used
+
+        # Estratégia (trend)
         sig_df = signal_on_off(df, sma_window=window)
-
-        if sig_df is None or sig_df.empty:
-            print(f"[WARN] signal_on_off retornou vazio para {t}. Pulando ticker.")
-            skipped.append(t)
-            continue
-
-        # valida colunas mínimas
-        if "Signal" not in sig_df.columns or "Close" not in sig_df.columns:
-            print(f"[WARN] Colunas esperadas ausentes para {t} (precisa de Signal e Close). Pulando ticker.")
-            skipped.append(t)
-            continue
-
         last_row = sig_df.iloc[-1]
+        signals[t] = int(last_row["Signal"])
+        prices[t] = float(last_row["Close"])
 
-        # valida NaN / None
-        try:
-            sig_val = last_row["Signal"]
-            close_val = last_row["Close"]
-            if sig_val is None or close_val is None:
-                raise ValueError("Signal/Close None")
-            signals[t] = int(sig_val)
-            prices[t] = float(close_val)
-        except Exception:
-            print(f"[WARN] Última linha inválida para {t}. Pulando ticker.")
-            skipped.append(t)
-            continue
+    # Se nada veio, não derruba o pipeline: registra evento e mantém estado.
+    if not signals:
+        log_event({
+            "type": "NO_DATA",
+            "ts": now,
+            "provider": DATA_PROVIDER_VERSION,
+            "state_id": sid,
+            "message": "Nenhum ticker retornou dados válidos. Mantendo estado anterior e encerrando execução.",
+            "skipped": skipped,
+            "universe": tickers
+        })
+        state["last_run"] = now
+        save_state(state)
+        return  # exit 0
 
-    valid_tickers = list(signals.keys())
-
-    # Se nada veio, aí sim falha (não existe operação sem insumo)
-    if not valid_tickers:
-        raise RuntimeError(f"Nenhum ticker retornou dados válidos. Pulados: {skipped}")
+    # Se alguns tickers vieram e outros não, recalcula universo efetivo
+    effective_tickers = list(signals.keys())
 
     weights = compute_weights(signals)
 
-    # Kill switch (se acionou, zera apenas o universo válido)
+    # Kill switch
     if kill_enabled:
         equity = float(state.get("equity", 100000.0))
         peak_eq = float(state.get("peak_equity", equity))
         kill, new_peak = update_kill_switch(equity, peak_eq, max_dd)
         state["peak_equity"] = float(new_peak)
-
         if kill:
             state["kill_switch"] = True
-            weights = {t: 0.0 for t in valid_tickers}
-            signals = {t: 0 for t in valid_tickers}
+            weights = {t: 0.0 for t in effective_tickers}
+            signals = {t: 0 for t in effective_tickers}
 
-    # Diferença de posições só para tickers válidos
-    current_positions = state.get("positions", {})
-    current_positions_valid = {t: current_positions.get(t) for t in valid_tickers if t in current_positions}
-    orders = diff_states(current_positions_valid, weights)
+    orders = diff_states(state.get("positions", {}), weights)
 
-    # Persistência do estado só para tickers válidos (sem fantasma)
+    # Atualiza posições apenas do universo efetivo
     state["positions"] = {
-        t: {"state": 1 if weights.get(t, 0.0) > 0 else 0, "weight": float(weights.get(t, 0.0))}
-        for t in valid_tickers
+        t: {"state": 1 if weights.get(t, 0) > 0 else 0, "weight": float(weights.get(t, 0))}
+        for t in effective_tickers
     }
     state["last_prices"] = prices
-
-    now = dt.datetime.utcnow().isoformat() + "Z"
     state["last_run"] = now
 
     equity = float(state.get("equity", 100000.0))
@@ -163,22 +202,22 @@ def run():
     if peak_eq > 0:
         state["last_drawdown"] = float((peak_eq - equity) / peak_eq)
 
-    log_event(
-        {
-            "type": "RUN",
-            "ts": now,
-            "provider": DATA_PROVIDER_VERSION,
-            "state_id": sid,
-            "kill_switch": state.get("kill_switch", False),
-            "universe": tickers,
-            "valid_universe": valid_tickers,
-            "skipped": skipped,
-            "signals": signals,
-            "weights": weights,
-            "prices": prices,
-            "orders": orders,
-        }
-    )
+    log_event({
+        "type": "RUN",
+        "ts": now,
+        "provider": DATA_PROVIDER_VERSION,
+        "state_id": sid,
+        "kill_switch": state.get("kill_switch", False),
+        "trend": {"reference": ref, "window": window},
+        "universe": tickers,
+        "effective_universe": effective_tickers,
+        "used_symbols": used_symbols,
+        "skipped": skipped,
+        "signals": signals,
+        "weights": weights,
+        "prices": prices,
+        "orders": orders
+    })
 
     save_state(state)
 
