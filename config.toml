@@ -1,0 +1,23 @@
+[universe]
+# Configure your trading universe with a list of assets.
+# Each asset requires a ticker symbol; type (ETF, STOCK, FX); and market.
+assets = [
+  { ticker = "BOVA11", type = "ETF", market = "B3" },
+  { ticker = "IVVB11", type = "ETF", market = "B3" },
+  { ticker = "IMAB11", type = "ETF", market = "B3" },
+  { ticker = "GOLD11", type = "ETF", market = "B3" }
+]
+
+[trend]
+# Trend following configuration
+window = 126
+reference = "SMA"
+
+[kill_switch]
+# Enable or disable the kill switch and set a maximum drawdown threshold.
+enabled = true
+max_drawdown = 0.20
+
+[system]
+# Starting capital for the backtest/system.
+initial_equity = 100000.0
