@@ -49,3 +49,55 @@ def run():
 
         last = sigdf.iloc[-1]
         signals[ticker] = int(last["Signal"])
+        last_prices[ticker] = float(last["Close"])
+
+    # Alocação equal-weight entre ON
+    weights = compute_weights(signals)
+
+    # Kill switch (MVP): baseado em equity do estado (em produção: mark-to-market real)
+    equity = float(state.get("equity", 100000.0))
+    peak_equity = float(state.get("peak_equity", equity))
+    kill, peak, dd = update_kill_switch(equity, peak_equity, MAX_DD)
+
+    # Ordens (mudanças de estado)
+    orders = diff_states(state.get("positions", {}), weights)
+
+    # Se kill acionou: força tudo OFF e congela
+    if kill:
+        weights = {t: 0.0 for t in weights.keys()}
+        orders = [{"ticker": t, "action": "FORCE_EXIT"} for t in weights.keys()]
+        state["kill_switch"] = True
+
+    # Persistir novo estado de posições
+    new_positions = {}
+    for t, w in weights.items():
+        new_positions[t] = {"state": 1 if w > 0 else 0, "weight": float(w)}
+
+    state["positions"] = new_positions
+    state["peak_equity"] = float(peak)
+    state["last_drawdown"] = float(dd)
+    state["last_run"] = datetime.utcnow().isoformat() + "Z"
+
+    log_event({
+        "type": "RUN",
+        "signals": signals,
+        "weights": weights,
+        "orders": orders,
+        "prices": last_prices,
+        "kill_switch": state.get("kill_switch", False),
+        "params": {"SMA_WINDOW": SMA_WINDOW, "MAX_DD": MAX_DD, "UNIVERSE": UNIVERSE},
+    })
+
+    save_state(state)
+
+
+if __name__ == "__main__":
+    try:
+        run()
+    except Exception as e:
+        # Loga falha também (pra auditoria)
+        try:
+            log_event({"type": "RUN_ERROR", "error": repr(e)})
+        except Exception:
+            pass
+        raise
