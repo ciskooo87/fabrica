@@ -19,6 +19,7 @@ UNIVERSE = {
     "Moeda forte": "UUP",
 }
 
+
 SMA_WINDOW = 200
 MAX_DD = 0.20          # 20% drawdown => kill switch
 MIN_VALID_ASSETS = 3   # governança: mínimo de ativos com dados válidos
