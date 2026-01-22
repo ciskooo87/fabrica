@@ -47,11 +47,18 @@ jobs:
           grep -n 'DATA_PROVIDER_VERSION = "STOOQ_CSV_IN_ACTIONS_v3"' core/data.py
 
       # ===== EXECUTION =====
-      - name: Run daily job
-        run: |
-          set -e
-          export PYTHONPATH="$GITHUB_WORKSPACE"
-          python jobs/run_daily.py
+
+       - name: Run daily job
+  env:
+    BRAPI_TOKEN: ${{ secrets.BRAPI_TOKEN }}
+    BRAPI_BASE_URL: "https://brapi.dev/api"
+    BRAPI_RANGE: "10y"
+    BRAPI_INTERVAL: "1d"
+  run: |
+    set -e
+    export PYTHONPATH="$GITHUB_WORKSPACE"
+    python jobs/run_daily.py
+
 
       # ===== PERSISTÊNCIA =====
       - name: Ensure state folder exists
