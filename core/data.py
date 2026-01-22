@@ -1,3 +1,4 @@
+# DATA_PROVIDER_VERSION = "STOOQ_FIRST_IN_ACTIONS_v1"
 import os
 import time
 import pandas as pd
@@ -8,7 +9,6 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.rename(columns=str.title)
 
-    # stooq às vezes vem em ordem desc; ordena
     try:
         df = df.sort_index()
     except Exception:
@@ -26,10 +26,6 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _to_stooq_symbol(ticker: str) -> str:
-    """
-    Stooq para ativos US costuma usar o padrão 'spy.us'.
-    Se já tiver '.', respeita. Se não, assume US e adiciona '.US'.
-    """
     t = ticker.strip()
     if "." in t:
         return t.lower()
@@ -52,7 +48,7 @@ def fetch_history_stooq(ticker: str, years: int = 10) -> pd.DataFrame:
     return df
 
 
-def fetch_history_yfinance(ticker: str, period: str = "10y", interval: str = "1d", retries: int = 4) -> pd.DataFrame:
+def fetch_history_yfinance(ticker: str, period: str = "10y", interval: str = "1d", retries: int = 3) -> pd.DataFrame:
     import yfinance as yf
 
     last_err = None
@@ -74,25 +70,23 @@ def fetch_history_yfinance(ticker: str, period: str = "10y", interval: str = "1d
                 return df
         except Exception as e:
             last_err = e
-        time.sleep(1.5 * (attempt + 1))
+        time.sleep(1.0 * (attempt + 1))
 
     raise ValueError(f"yfinance sem dados para {ticker}. Erro: {repr(last_err)}")
 
 
 def fetch_history(ticker: str, period: str = "10y", interval: str = "1d") -> pd.DataFrame:
     """
-    Política:
-    - No GitHub Actions: stooq first (evita Yahoo instável/bloqueado)
-    - Local: yfinance first, fallback stooq
+    No GitHub Actions: usa Stooq (mais estável).
+    Fora do Actions: tenta Yahoo, depois Stooq.
     """
     in_actions = os.getenv("GITHUB_ACTIONS", "").lower() == "true"
 
     if in_actions:
         if interval != "1d":
-            raise ValueError("No Actions, somente interval=1d (MVP).")
+            raise ValueError("No Actions, apenas interval=1d (MVP).")
         return fetch_history_stooq(ticker, years=10)
 
-    # Fora do Actions: tenta Yahoo, depois stooq
     try:
         return fetch_history_yfinance(ticker, period=period, interval=interval)
     except Exception:
