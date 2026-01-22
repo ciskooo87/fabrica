@@ -1,7 +1,6 @@
+import os
 import time
 import pandas as pd
-import yfinance as yf
-import requests
 
 def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
@@ -9,24 +8,53 @@ def _normalize_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
 
     df = df.rename(columns=str.title)
 
-    # yfinance às vezes traz MultiIndex colunas (quando baixa vários ativos)
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[0] for c in df.columns]
+    # stooq às vezes vem em ordem desc; ordena
+    try:
+        df = df.sort_index()
+    except Exception:
+        pass
 
-    needed = ["Open", "High", "Low", "Close", "Volume"]
+    needed = ["Open", "High", "Low", "Close"]
     if not all(c in df.columns for c in needed):
-        # tenta auto_adjust/formatos diferentes
-        cols = set(df.columns)
-        if "Adj Close" in cols and "Close" not in cols:
-            df["Close"] = df["Adj Close"]
-        if not all(c in df.columns for c in needed):
-            return pd.DataFrame()
+        return pd.DataFrame()
 
-    df = df[needed].dropna()
+    if "Volume" not in df.columns:
+        df["Volume"] = 0
+
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
+    return df
+
+
+def _to_stooq_symbol(ticker: str) -> str:
+    """
+    Stooq para ativos US costuma usar o padrão 'spy.us'.
+    Se já tiver '.', respeita. Se não, assume US e adiciona '.US'.
+    """
+    t = ticker.strip()
+    if "." in t:
+        return t.lower()
+    return f"{t}.US".lower()
+
+
+def fetch_history_stooq(ticker: str, years: int = 10) -> pd.DataFrame:
+    from pandas_datareader import data as pdr
+
+    end = pd.Timestamp.utcnow().normalize()
+    start = end - pd.DateOffset(years=years)
+
+    symbol = _to_stooq_symbol(ticker)
+    df = pdr.DataReader(symbol, "stooq", start, end)
+    df = _normalize_ohlcv(df)
+
+    if df.empty:
+        raise ValueError(f"Stooq sem dados para {ticker} (symbol={symbol})")
+
     return df
 
 
 def fetch_history_yfinance(ticker: str, period: str = "10y", interval: str = "1d", retries: int = 4) -> pd.DataFrame:
+    import yfinance as yf
+
     last_err = None
     for attempt in range(retries):
         try:
@@ -38,68 +66,36 @@ def fetch_history_yfinance(ticker: str, period: str = "10y", interval: str = "1d
                 progress=False,
                 threads=False,
             )
+            df = df.rename(columns=str.title)
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = [c[0] for c in df.columns]
             df = _normalize_ohlcv(df)
             if not df.empty:
                 return df
         except Exception as e:
             last_err = e
-
-        # backoff simples
         time.sleep(1.5 * (attempt + 1))
 
-    # Falhou
     raise ValueError(f"yfinance sem dados para {ticker}. Erro: {repr(last_err)}")
-
-
-def fetch_history_stooq(ticker: str, years: int = 10) -> pd.DataFrame:
-    """
-    Fallback confiável para muitos tickers de ETFs/ações US via Stooq.
-    Usa pandas-datareader, que acessa Stooq.
-    """
-    try:
-        from pandas_datareader import data as pdr
-    except Exception as e:
-        raise ValueError(f"pandas-datareader indisponível: {repr(e)}")
-
-    # Stooq geralmente usa sufixos; para ETFs/ações US costuma aceitar "spy", "tlt" etc.
-    symbol = ticker.lower()
-
-    end = pd.Timestamp.utcnow().normalize()
-    start = end - pd.DateOffset(years=years)
-
-    df = pdr.DataReader(symbol, "stooq", start, end)
-
-    # Stooq vem em ordem desc, vamos ordenar asc
-    df = df.sort_index()
-
-    # Padroniza para OHLCV
-    df = df.rename(columns=str.title)
-    # Algumas vezes vem "Close" e "Volume", e OHLC completos
-    needed = ["Open", "High", "Low", "Close"]
-    if not all(c in df.columns for c in needed):
-        raise ValueError(f"Stooq sem colunas OHLC para {ticker}")
-
-    if "Volume" not in df.columns:
-        df["Volume"] = 0
-
-    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-    return df
 
 
 def fetch_history(ticker: str, period: str = "10y", interval: str = "1d") -> pd.DataFrame:
     """
-    Fonte primária: yfinance (rápida)
-    Fallback: Stooq (mais estável em runners)
+    Política:
+    - No GitHub Actions: stooq first (evita Yahoo instável/bloqueado)
+    - Local: yfinance first, fallback stooq
     """
-    # 1) tenta yfinance
+    in_actions = os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+
+    if in_actions:
+        if interval != "1d":
+            raise ValueError("No Actions, somente interval=1d (MVP).")
+        return fetch_history_stooq(ticker, years=10)
+
+    # Fora do Actions: tenta Yahoo, depois stooq
     try:
         return fetch_history_yfinance(ticker, period=period, interval=interval)
     except Exception:
-        pass
-
-    # 2) fallback stooq (intervalo diário)
-    if interval != "1d":
-        # fallback só para diário (MVP)
-        raise ValueError(f"Fallback Stooq só suportado para interval=1d. Ticker={ticker}")
-
-    return fetch_history_stooq(ticker, years=10)
+        if interval != "1d":
+            raise
+        return fetch_history_stooq(ticker, years=10)
