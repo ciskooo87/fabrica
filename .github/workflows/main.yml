@@ -2,6 +2,7 @@ name: Daily Trend System
 
 on:
   schedule:
+    # 21:15 UTC ~ 18:15 BRT (após close EUA)
     - cron: "15 21 * * 1-5"
   workflow_dispatch: {}
 
@@ -27,75 +28,75 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install deps
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # 🔥 Evidência: mostra o arquivo real no runner com numeração
-      - name: Debug - show core/data.py with line numbers
+      # ========= DEBUG / EVIDÊNCIA =========
+      - name: Debug - show critical files (with line numbers)
         run: |
-          echo "----- core/data.py (line-numbered) -----"
+          echo "PWD:"
+          pwd
+          echo "ROOT LS:"
+          ls -la
+          echo "---- core/data.py (lines 1-120) ----"
           nl -ba core/data.py | sed -n '1,120p'
-          echo "----- jobs/run_daily.py (line-numbered) -----"
-          nl -ba jobs/run_daily.py | sed -n '1,140p'
+          echo "---- jobs/run_daily.py (lines 1-160) ----"
+          nl -ba jobs/run_daily.py | sed -n '1,160p'
 
-      # ✅ Gate: se não tiver a versão certa, falha aqui (antes de rodar)
       - name: Gate - verify data provider version
         run: |
-          grep -n "DATA_PROVIDER_VERSION = \"STOOQ_CSV_IN_ACTIONS_v3\"" core/data.py
+          grep -n 'DATA_PROVIDER_VERSION = "STOOQ_CSV_IN_ACTIONS_v3"' core/data.py
 
-      # ✅ Prova via Python (importa e imprime)
-      - name: Debug - print provider version from Python
+      - name: Debug - print provider version via Python
         run: |
-          PYTHONPATH="$GITHUB_WORKSPACE" python -c "import core.data as d; print('DATA_PROVIDER_VERSION:', d.DATA_PROVIDER_VERSION)"
+          PYTHONPATH="$GITHUB_WORKSPACE" python - << 'EOF'
+          import core.data as d
+          print("DATA_PROVIDER_VERSION:", d.DATA_PROVIDER_VERSION)
+          EOF
 
+      # ========= EXECUÇÃO =========
       - name: Run daily job
         run: |
           set -e
           export PYTHONPATH="$GITHUB_WORKSPACE"
           python jobs/run_daily.py
 
+      # ========= PERSISTÊNCIA =========
       - name: Ensure state folder exists
         run: |
           mkdir -p state
           touch state/.gitkeep
+          touch state/state.json
+          touch state/events.log
 
-      - name: Commit state + audit trail
-  run: |
-    set -e
+      - name: Commit state + audit trail (with rebase & retry)
+        run: |
+          set -e
 
-    git config user.name "trend-bot"
-    git config user.email "trend-bot@users.noreply.github.com"
+          git config user.name "trend-bot"
+          git config user.email "trend-bot@users.noreply.github.com"
 
-    # Sempre sincroniza com o remoto antes de comitar/push
-    git fetch origin main
+          # Sempre sincroniza com o remoto
+          git fetch origin main
 
-    # Rebase no main remoto (evita merge commits no CI)
-    git rebase origin/main || (git rebase --abort && git reset --hard origin/main)
+          # Rebase limpo (state é artefato, último run vence)
+          git rebase origin/main || (git rebase --abort && git reset --hard origin/main)
 
-    # Garante pasta e arquivos
-    mkdir -p state
-    touch state/.gitkeep
-    touch state/state.json
-    touch state/events.log
+          git add state/state.json state/events.log state/.gitkeep || true
+          git commit -m "Daily run: update state/audit trail" || echo "No changes to commit"
 
-    # Adiciona somente artefatos do state
-    git add state/state.json state/events.log state/.gitkeep || true
+          # Retry de push (protege contra corrida)
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then
+              echo "Push OK"
+              exit 0
+            fi
+            echo "Push failed (attempt $i). Rebasing and retrying..."
+            git fetch origin main
+            git rebase origin/main || (git rebase --abort && git reset --hard origin/main)
+          done
 
-    # Comita se houver mudança
-    git commit -m "Daily run: update state/audit trail" || echo "No changes to commit"
-
-    # Tenta push; se falhar por corrida, refaz rebase e tenta de novo
-    for i in 1 2 3; do
-      if git push origin HEAD:main; then
-        echo "Push OK"
-        exit 0
-      fi
-      echo "Push failed (attempt $i). Rebasing and retrying..."
-      git fetch origin main
-      git rebase origin/main || (git rebase --abort && git reset --hard origin/main)
-    done
-
-    echo "Push failed after retries"
-    exit 1
+          echo "Push failed after retries"
+          exit 1
