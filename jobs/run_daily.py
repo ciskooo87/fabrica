@@ -12,7 +12,7 @@ from core.strategy import signal_on_off
 from core.portfolio import compute_weights, update_kill_switch, diff_states
 
 UNIVERSE = {
-    "Risco direcional": "SPY",
+    "Risco direcional": "SPY.US",
     "Proteção": "TLT",
     "Real asset": "DBC",
     "Taxas": "IEF",
