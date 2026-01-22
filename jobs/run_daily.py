@@ -1,3 +1,9 @@
+import sys
+import os
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
 from datetime import datetime
 from core.storage import load_state, save_state, log_event
 from core.data import fetch_history
