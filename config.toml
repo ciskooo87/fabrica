@@ -107,14 +107,18 @@ operational_fail_stop = true
 # DADOS
 # ============================
 [data]
-# Importante: o seu core/data.py hoje está preparado pra ETFs EUA via Stooq (.us).
-# Para B3, você vai precisar de um provider compatível (ou adaptar o data.py).
-#
-# Deixamos aqui como "B3" para o motor entender a intenção.
-provider = "B3"
+provider = "brapi"
+base_url = "https://brapi.dev/api"
+range = "10y"
+interval = "1d"
 
-# Tickers são canônicos (BOVA11 etc.). O provider fará a tradução.
+# token via variável de ambiente (NUNCA hardcode)
+token_env = "BRAPI_TOKEN"
+
+# BRAPI usa tickers B3 canônicos (ex.: BOVA11, IVVB11...)
 ticker_style = "canonical"
+
+
 
 # Últimos N anos de histórico desejado (não obrigatório, mas bom pra tendência)
 lookback_years = 10
