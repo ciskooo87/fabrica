@@ -1,0 +1,30 @@
+{
+  "equity": 100000.0,
+  "peak_equity": 100000.0,
+  "last_drawdown": 0.0,
+  "kill_switch": false,
+  "positions": {
+    "SPY.US": {
+      "state": 1,
+      "weight": 0.3333333333333333
+    },
+    "TLT": {
+      "state": 0,
+      "weight": 0.0
+    },
+    "DBC": {
+      "state": 1,
+      "weight": 0.3333333333333333
+    },
+    "IEF": {
+      "state": 1,
+      "weight": 0.3333333333333333
+    },
+    "UUP": {
+      "state": 0,
+      "weight": 0.0
+    }
+  },
+  "last_run": "2026-01-22T16:40:36.981666Z",
+  "version": "mvp-1"
+}
