@@ -89,6 +89,18 @@ def save_state(state: dict):
         f.flush()
         os.fsync(f.fileno())
 
+        # snapshot por data (governança)
+    try:
+        import datetime as _dt
+        snap_dir = os.path.join(STATE_DIR, "snapshots")
+        os.makedirs(snap_dir, exist_ok=True)
+        day = _dt.datetime.utcnow().strftime("%Y-%m-%d")
+        snap_file = os.path.join(snap_dir, f"{day}.json")
+        with open(snap_file, "w", encoding="utf-8") as sf:
+            json.dump(payload, sf, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
     # backup do antigo (se existir)
     if os.path.exists(STATE_FILE):
         try:
