@@ -12,6 +12,12 @@ concurrency:
   group: daily-trend-system
   cancel-in-progress: false
 
+  - name: Debug - data provider signature
+  run: |
+    echo "---- core/data.py signature ----"
+    head -n 5 core/data.py
+
+
 jobs:
   run:
     runs-on: ubuntu-latest
