@@ -2,7 +2,7 @@ name: Daily Trend System
 
 on:
   schedule:
-    # 21:15 UTC ~ 18:15 BRT (após close EUA)
+    # 21:15 UTC ~ 18:15 BRT
     - cron: "15 21 * * 1-5"
   workflow_dispatch: {}
 
@@ -33,70 +33,51 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ========= DEBUG / EVIDÊNCIA =========
-      - name: Debug - show critical files (with line numbers)
+      # ===== DEBUG =====
+      - name: Debug - show critical files
         run: |
-          echo "PWD:"
-          pwd
-          echo "ROOT LS:"
-          ls -la
-          echo "---- core/data.py (lines 1-120) ----"
+          echo "PWD:" && pwd
+          echo "---- core/data.py ----"
           nl -ba core/data.py | sed -n '1,120p'
-          echo "---- jobs/run_daily.py (lines 1-160) ----"
+          echo "---- jobs/run_daily.py ----"
           nl -ba jobs/run_daily.py | sed -n '1,160p'
 
-      - name: Gate - verify data provider version
+      - name: Gate - verify data provider
         run: |
           grep -n 'DATA_PROVIDER_VERSION = "STOOQ_CSV_IN_ACTIONS_v3"' core/data.py
 
-      - name: Debug - print provider version via Python
-        run: |
-          PYTHONPATH="$GITHUB_WORKSPACE" python - << 'EOF'
-          import core.data as d
-          print("DATA_PROVIDER_VERSION:", d.DATA_PROVIDER_VERSION)
-          EOF
-
-      # ========= EXECUÇÃO =========
+      # ===== EXECUTION =====
       - name: Run daily job
         run: |
           set -e
           export PYTHONPATH="$GITHUB_WORKSPACE"
           python jobs/run_daily.py
 
-      # ========= PERSISTÊNCIA =========
+      # ===== PERSISTÊNCIA =====
       - name: Ensure state folder exists
         run: |
           mkdir -p state
           touch state/.gitkeep
-          touch state/state.json
-          touch state/events.log
 
-      - name: Commit state + audit trail (with rebase & retry)
+      - name: Commit state + audit trail (SAFE)
         run: |
           set -e
 
           git config user.name "trend-bot"
           git config user.email "trend-bot@users.noreply.github.com"
 
-          # Sempre sincroniza com o remoto
-          git fetch origin main
+          # Stash qualquer mudança local (state/)
+          git stash push -u -m "ci-state" || true
 
-          # Rebase limpo (state é artefato, último run vence)
-          git rebase origin/main || (git rebase --abort && git reset --hard origin/main)
+          # Sincroniza com remoto
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+
+          # Reaplica state gerado
+          git stash pop || true
 
           git add state/state.json state/events.log state/.gitkeep || true
-          git commit -m "Daily run: update state/audit trail" || echo "No changes to commit"
+          git commit -m "Daily run: update state/audit trail" || echo "Nothing to commit"
 
-          # Retry de push (protege contra corrida)
-          for i in 1 2 3; do
-            if git push origin HEAD:main; then
-              echo "Push OK"
-              exit 0
-            fi
-            echo "Push failed (attempt $i). Rebasing and retrying..."
-            git fetch origin main
-            git rebase origin/main || (git rebase --abort && git reset --hard origin/main)
-          done
-
-          echo "Push failed after retries"
-          exit 1
+          git push origin main
