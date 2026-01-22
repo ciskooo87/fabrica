@@ -1,66 +1,130 @@
-# DATA_PROVIDER_VERSION = "STOOQ_CSV_IN_ACTIONS_v3"
+# DATA_PROVIDER_VERSION = "BRAPI_QUOTE_HISTORY_v1"
 
+import os
+import time
+import requests
 import pandas as pd
-import urllib.request
-import datetime as dt
 
 
-DATA_PROVIDER_VERSION = "STOOQ_CSV_IN_ACTIONS_v3"
+DATA_PROVIDER_VERSION = "BRAPI_QUOTE_HISTORY_v1"
+BRAPI_BASE_URL = os.getenv("BRAPI_BASE_URL", "https://brapi.dev/api")
+BRAPI_TOKEN = os.getenv("BRAPI_TOKEN", "").strip()
 
 
-def _to_stooq_symbol(ticker: str) -> str:
+def _headers():
+    # docs recomendam Authorization: Bearer <token>
+    # (se não tiver token, tenta mesmo assim; alguns ativos exigem token)
+    h = {"User-Agent": "trend-system/1.0"}
+    if BRAPI_TOKEN:
+        h["Authorization"] = f"Bearer {BRAPI_TOKEN}"
+    return h
+
+
+def _parse_hist(hlist):
     """
-    Converte ticker canônico (SPY, TLT etc) para símbolo Stooq:
-    - ETFs USA: spy.us
+    historicalDataPrice costuma vir como lista de candles com campos tipo:
+    date (epoch), open, high, low, close, volume
     """
-    t = ticker.strip().upper()
-    if "." in t:
-        # se alguém passar já com sufixo, normaliza
-        return t.lower()
-    return f"{t.lower()}.us"
+    if not isinstance(hlist, list) or not hlist:
+        return pd.DataFrame()
+
+    rows = []
+    for x in hlist:
+        if not isinstance(x, dict):
+            continue
+
+        d = x.get("date") or x.get("datetime") or x.get("timestamp")
+        o = x.get("open")
+        h = x.get("high")
+        l = x.get("low")
+        c = x.get("close")
+        v = x.get("volume", 0)
+
+        if d is None or c is None:
+            continue
+
+        # date pode vir em epoch (segundos) ou ms
+        try:
+            d = int(d)
+            if d > 10_000_000_000:  # ms
+                d = d / 1000
+            dt_index = pd.to_datetime(d, unit="s", utc=True).tz_convert(None)
+        except Exception:
+            # fallback: tenta parse como string
+            dt_index = pd.to_datetime(d, errors="coerce")
+            if pd.isna(dt_index):
+                continue
+
+        rows.append({
+            "Date": dt_index,
+            "Open": float(o) if o is not None else None,
+            "High": float(h) if h is not None else None,
+            "Low": float(l) if l is not None else None,
+            "Close": float(c) if c is not None else None,
+            "Volume": float(v) if v is not None else 0.0,
+        })
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows).dropna(subset=["Date", "Close"])
+    df = df.set_index("Date").sort_index()
+
+    # garante colunas
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        if col not in df.columns:
+            df[col] = None
+
+    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna(subset=["Close"])
+    return df
 
 
 def fetch_history(ticker: str, period="10y", interval="1d") -> pd.DataFrame:
     """
-    Stooq CSV:
-    https://stooq.com/q/d/l/?s=spy.us&i=d
+    BRAPI:
+      GET /api/quote/{tickers}?range=10y&interval=1d
 
-    period/interval ficam "decorativos" aqui (mantemos assinatura).
+    range suportados incluem 10y/max e interval 1d etc. :contentReference[oaicite:2]{index=2}
     """
-    sym = _to_stooq_symbol(ticker)
-    url = f"https://stooq.com/q/d/l/?s={sym}&i=d"
-
-    try:
-        with urllib.request.urlopen(url, timeout=30) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-    except Exception:
+    t = ticker.strip().upper()
+    if not t:
         return pd.DataFrame()
 
-    if not raw or "Date" not in raw:
-        return pd.DataFrame()
+    rng = os.getenv("BRAPI_RANGE", "10y")
+    itv = os.getenv("BRAPI_INTERVAL", "1d")
 
-    from io import StringIO
-    df = pd.read_csv(StringIO(raw))
+    # permite override pelo caller
+    if period and isinstance(period, str):
+        rng = period
+    if interval and isinstance(interval, str):
+        itv = interval
 
-    # Normalização
-    # Stooq retorna: Date,Open,High,Low,Close,Volume
-    if "Date" not in df.columns:
-        return pd.DataFrame()
+    url = f"{BRAPI_BASE_URL}/quote/{t}"
+    params = {"range": rng, "interval": itv}
 
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date"]).set_index("Date").sort_index()
+    # token por query param também é aceito, mas header é mais seguro
+    if not BRAPI_TOKEN:
+        # se quiser, dá pra passar token por query (menos recomendado)
+        pass
 
-    # Padroniza colunas em Title Case
-    df = df.rename(columns={c: c.title() for c in df.columns})
+    # retry simples (robustez em CI)
+    last_err = None
+    for _ in range(3):
+        try:
+            r = requests.get(url, headers=_headers(), params=params, timeout=30)
+            if r.status_code == 429:
+                time.sleep(2)
+                continue
+            r.raise_for_status()
+            data = r.json()
+            results = data.get("results") or []
+            if not results:
+                return pd.DataFrame()
+            hist = results[0].get("historicalDataPrice") or []
+            return _parse_hist(hist)
+        except Exception as e:
+            last_err = e
+            time.sleep(1)
 
-    needed = ["Open", "High", "Low", "Close"]
-    if not all(c in df.columns for c in needed):
-        return pd.DataFrame()
-
-    if "Volume" not in df.columns:
-        df["Volume"] = 0
-
-    # Remove linhas inválidas
-    df = df[["Open", "High", "Low", "Close", "Volume"]].dropna()
-
-    return df
+    # falhou de vez
+    return pd.DataFrame()
