@@ -1,10 +1,9 @@
 name: Daily Trend System
 
 on:
+  workflow_dispatch:
   schedule:
-    # 21:15 UTC ~ 18:15 BRT
-    - cron: "15 21 * * 1-5"
-  workflow_dispatch: {}
+    - cron: "15 21 * * 1-5" # seg-sex 21:15 UTC (~18:15 Brasil -03)
 
 permissions:
   contents: write
@@ -16,6 +15,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     steps:
       - name: Checkout repo
@@ -33,61 +33,75 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      # ===== DEBUG =====
-      - name: Debug - show critical files
-        run: |
-          echo "PWD:" && pwd
-          echo "---- core/data.py ----"
-          nl -ba core/data.py | sed -n '1,120p'
-          echo "---- jobs/run_daily.py ----"
-          nl -ba jobs/run_daily.py | sed -n '1,160p'
-
-      - name: Gate - verify data provider
-        run: |
-          grep -n 'DATA_PROVIDER_VERSION = "STOOQ_CSV_IN_ACTIONS_v3"' core/data.py
-
-      # ===== EXECUTION =====
-
-       - name: Run daily job
-  env:
-    BRAPI_TOKEN: ${{ secrets.BRAPI_TOKEN }}
-    BRAPI_BASE_URL: "https://brapi.dev/api"
-    BRAPI_RANGE: "10y"
-    BRAPI_INTERVAL: "1d"
-  run: |
-    set -e
-    export PYTHONPATH="$GITHUB_WORKSPACE"
-    python jobs/run_daily.py
-
-
-      # ===== PERSISTÊNCIA =====
-      - name: Ensure state folder exists
+      - name: Ensure state folders exist
         run: |
           mkdir -p state
+          mkdir -p state/snapshots
           touch state/.gitkeep
 
-      - name: Commit state + audit trail (SAFE)
+      - name: Gate - print critical versions
+        run: |
+          python -c "import sys; print('python', sys.version)"
+          python -c "import core.data as d; print('DATA_PROVIDER_VERSION', getattr(d,'DATA_PROVIDER_VERSION', 'NA'))"
+
+      - name: Run daily job
+        env:
+          # BRAPI (B3)
+          BRAPI_TOKEN: ${{ secrets.BRAPI_TOKEN }}
+          BRAPI_BASE_URL: "https://brapi.dev/api"
+          BRAPI_RANGE: "10y"
+          BRAPI_INTERVAL: "1d"
+
+          # garante imports (core/ e jobs/ na raiz)
+          PYTHONPATH: ${{ github.workspace }}
+        run: |
+          set -e
+          python jobs/run_daily.py
+
+      - name: Commit state + audit trail (safe rebase + retry)
+        env:
+          BRANCH: main
         run: |
           set -e
 
           git config user.name "trend-bot"
           git config user.email "trend-bot@users.noreply.github.com"
 
-          # Stash qualquer mudança local (state/)
-          git stash push -u -m "ci-state" || true
+          # 1) stasha qualquer mudança gerada pelo job
+          git add -A
+          git stash push -m "pre-rebase-autostash" || true
 
-          # Sincroniza com remoto
-          git fetch origin main
-          git checkout main
-          git reset --hard origin/main
+          # 2) traz o remoto com rebase (evita non-fast-forward)
+          git fetch origin ${BRANCH}
+          git checkout ${BRANCH}
+          git pull --rebase origin ${BRANCH}
+
+          # 3) restaura mudanças do job
+          git stash pop || true
+
+          # 4) adiciona só o que interessa
+          mkdir -p state state/snapshots
+          touch state/.gitkeep
 
           git add state/state.json state/events.log state/snapshots state/.gitkeep || true
 
+          # 5) se não tem nada pra commitar, sai bonito
+          if git diff --cached --quiet; then
+            echo "Nada para commitar."
+            exit 0
+          fi
 
-          # Reaplica state gerado
-          git stash pop || true
+          git commit -m "Daily run: update state/audit trail"
 
-          git add state/state.json state/events.log state/.gitkeep || true
-          git commit -m "Daily run: update state/audit trail" || echo "Nothing to commit"
+          # 6) push com retry leve (race condition de runs próximos)
+          for i in 1 2 3; do
+            if git push origin ${BRANCH}; then
+              echo "Push OK."
+              exit 0
+            fi
+            echo "Push falhou. Tentando rebase + retry ($i/3)..."
+            git pull --rebase origin ${BRANCH}
+          done
 
-          git push origin main
+          echo "Push falhou após retries."
+          exit 1
