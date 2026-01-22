@@ -4,7 +4,7 @@
   "last_drawdown": 0.0,
   "kill_switch": false,
   "positions": {
-    "SPY.US": {
+    "SPY": {
       "state": 1,
       "weight": 0.3333333333333333
     },
@@ -25,6 +25,15 @@
       "weight": 0.0
     }
   },
-  "last_run": "2026-01-22T16:40:36.981666Z",
-  "version": "mvp-1"
+  "last_run": "2026-01-22T16:56:18.535192Z",
+  "version": "mvp-1",
+  "last_portfolio_return": 0.0,
+  "last_m2m_note": "NO_PREV_PRICES_OR_WEIGHTS",
+  "last_prices": {
+    "SPY": 690.16,
+    "TLT": 87.3606,
+    "DBC": 23.72,
+    "IEF": 95.7006,
+    "UUP": 27.145
+  }
 }
