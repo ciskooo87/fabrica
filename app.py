@@ -1,15 +1,31 @@
 import sys
 import os
 
-ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-if ROOT_DIR not in sys.path:
-    sys.path.insert(0, ROOT_DIR)
+HERE = os.path.dirname(os.path.abspath(__file__))
+
+CANDIDATES = [
+    HERE,
+    os.path.dirname(HERE),
+    os.path.dirname(os.path.dirname(HERE)),
+]
+
+CORE_FOUND = False
+for p in CANDIDATES:
+    if os.path.isdir(os.path.join(p, "core")):
+        sys.path.insert(0, p)
+        CORE_FOUND = True
+        break
+
+if not CORE_FOUND:
+    raise RuntimeError(
+        f"Não achei a pasta 'core' nos caminhos candidatos: {CANDIDATES}. "
+        "Garanta que 'core/' está no repo e contém __init__.py."
+    )
 
 import json
 import pandas as pd
 import streamlit as st
 from core.storage import load_state
-
 
 STATE_DIR = "state"
 LOG_FILE = os.path.join(STATE_DIR, "events.log")
@@ -18,6 +34,13 @@ st.set_page_config(page_title="Sistema Autônomo de Tendência", layout="wide")
 
 st.title("Sistema Autônomo Baseado em Tendência (Price-Based)")
 st.caption("Preço decide. Regra executa. Stop manda. Humano observa.")
+
+# Diagnóstico (apague depois)
+with st.expander("Debug (remover depois)"):
+    st.write("HERE:", HERE)
+    st.write("CANDIDATES:", CANDIDATES)
+    st.write("sys.path[0:5]:", sys.path[:5])
+    st.write("core found:", CORE_FOUND)
 
 state = load_state()
 
