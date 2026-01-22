@@ -1,7 +1,6 @@
 import os
 import sys
 
-# ✅ adiciona a raiz do repo no PYTHONPATH
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
@@ -23,11 +22,12 @@ UNIVERSE = {
 SMA_WINDOW = 200
 MAX_DD = 0.20
 
+# ✅ Governança operacional: mínimo de ativos com sinal válido para rodar
+MIN_VALID_ASSETS = 3
+
 
 def run():
-    # garante que state/ existe
     os.makedirs(os.path.join(ROOT_DIR, "state"), exist_ok=True)
-
     state = load_state()
 
     if state.get("kill_switch", False):
@@ -36,23 +36,39 @@ def run():
 
     signals = {}
     last_prices = {}
+    errors = {}
 
+    # Busca e sinal por ativo (robusto)
     for _, ticker in UNIVERSE.items():
-        df = fetch_history(ticker, period="10y", interval="1d")
-        sigdf = signal_on_off(df, sma_window=SMA_WINDOW)
-        if sigdf.empty:
-            raise RuntimeError(f"Sem dados suficientes para SMA{SMA_WINDOW} em {ticker}")
+        try:
+            df = fetch_history(ticker, period="10y", interval="1d")
+            sigdf = signal_on_off(df, sma_window=SMA_WINDOW)
+            if sigdf.empty:
+                raise RuntimeError(f"Sem dados suficientes para SMA{SMA_WINDOW} em {ticker}")
 
-        last = sigdf.iloc[-1]
-        signals[ticker] = int(last["Signal"])
-        last_prices[ticker] = float(last["Close"])
+            last = sigdf.iloc[-1]
+            signals[ticker] = int(last["Signal"])
+            last_prices[ticker] = float(last["Close"])
+        except Exception as e:
+            errors[ticker] = repr(e)
 
+    # Se muitos ativos falharam, aborta (proteção contra dados ruins)
+    if len(signals) < MIN_VALID_ASSETS:
+        log_event({
+            "type": "RUN_ERROR",
+            "error": "INSUFFICIENT_VALID_ASSETS",
+            "details": {"valid_assets": list(signals.keys()), "errors": errors},
+        })
+        raise RuntimeError(f"Poucos ativos válidos ({len(signals)}) — abortando. Erros: {errors}")
+
+    # Pesos equal weight somente nos ativos válidos (ON)
     weights = compute_weights(signals)
 
     equity = float(state.get("equity", 100000.0))
     peak_equity = float(state.get("peak_equity", equity))
     kill, peak, dd = update_kill_switch(equity, peak_equity, MAX_DD)
 
+    # Ordens baseadas nas mudanças de estado
     orders = diff_states(state.get("positions", {}), weights)
 
     if kill:
@@ -73,6 +89,7 @@ def run():
         "weights": weights,
         "orders": orders,
         "prices": last_prices,
+        "data_errors": errors,  # 👈 transparência total
         "kill_switch": state.get("kill_switch", False),
         "params": {"SMA_WINDOW": SMA_WINDOW, "MAX_DD": MAX_DD, "UNIVERSE": UNIVERSE},
     })
@@ -81,11 +98,4 @@ def run():
 
 
 if __name__ == "__main__":
-    try:
-        run()
-    except Exception as e:
-        try:
-            log_event({"type": "RUN_ERROR", "error": repr(e)})
-        except Exception:
-            pass
-        raise
+    run()
