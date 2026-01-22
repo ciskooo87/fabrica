@@ -25,15 +25,27 @@
       "weight": 0.0
     }
   },
+<<<<<<< Updated upstream
   "last_run": "2026-01-22T16:56:18.535192Z",
+=======
+  "last_run": "2026-01-22T16:56:57.168297Z",
+>>>>>>> Stashed changes
   "version": "mvp-1",
   "last_portfolio_return": 0.0,
   "last_m2m_note": "NO_PREV_PRICES_OR_WEIGHTS",
   "last_prices": {
+<<<<<<< Updated upstream
     "SPY": 690.16,
     "TLT": 87.3606,
     "DBC": 23.72,
     "IEF": 95.7006,
     "UUP": 27.145
+=======
+    "SPY": 690.085,
+    "TLT": 87.36,
+    "DBC": 23.72,
+    "IEF": 95.705,
+    "UUP": 27.1494
+>>>>>>> Stashed changes
   }
 }
