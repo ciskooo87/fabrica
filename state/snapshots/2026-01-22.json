@@ -1,0 +1,10 @@
+{
+  "equity": 100000.0,
+  "peak_equity": 100000.0,
+  "last_drawdown": 0.0,
+  "kill_switch": false,
+  "positions": {},
+  "last_prices": {},
+  "last_run": "2026-01-22T18:40:45.761738Z",
+  "state_id": "UNIV=BOVA11,IVVB11,IMAB11,GOLD11|TREND=SMA:126|PROVIDER=BRAPI_QUOTE_HISTORY_v1"
+}
