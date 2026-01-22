@@ -74,6 +74,9 @@ jobs:
           git checkout main
           git reset --hard origin/main
 
+          git add state/state.json state/events.log state/snapshots state/.gitkeep || true
+
+
           # Reaplica state gerado
           git stash pop || true
 
