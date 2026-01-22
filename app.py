@@ -1,14 +1,14 @@
-import json
-import os
-import pandas as pd
-import streamlit as st
-from core.storage import load_state
 import sys
 import os
 
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 if ROOT_DIR not in sys.path:
-    sys.path.append(ROOT_DIR)
+    sys.path.insert(0, ROOT_DIR)
+
+import json
+import pandas as pd
+import streamlit as st
+from core.storage import load_state
 
 
 STATE_DIR = "state"
@@ -24,7 +24,7 @@ state = load_state()
 c1, c2, c3, c4 = st.columns(4)
 c1.metric("Equity (MVP)", f"{state.get('equity', 0):,.2f}")
 c2.metric("Peak Equity", f"{state.get('peak_equity', 0):,.2f}")
-c3.metric("Drawdown", f"{state.get('last_drawdown', 0)*100:.2f}%")
+c3.metric("Drawdown", f"{state.get('last_drawdown', 0) * 100:.2f}%")
 c4.metric("Kill Switch", "ATIVO" if state.get("kill_switch") else "OFF")
 
 st.divider()
@@ -54,8 +54,7 @@ if os.path.exists(LOG_FILE):
                 pass
 
     if rows:
-        logdf = pd.json_normalize(rows)
-        logdf = logdf.sort_values("ts", ascending=False)
+        logdf = pd.json_normalize(rows).sort_values("ts", ascending=False)
         st.dataframe(logdf, use_container_width=True)
     else:
         st.warning("Log existe, mas está vazio/ilegível.")
