@@ -3,6 +3,13 @@ import os
 import pandas as pd
 import streamlit as st
 from core.storage import load_state
+import sys
+import os
+
+ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
+
 
 STATE_DIR = "state"
 LOG_FILE = os.path.join(STATE_DIR, "events.log")
